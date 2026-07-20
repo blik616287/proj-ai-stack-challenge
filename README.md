@@ -43,10 +43,17 @@ cd ..
 # 2. install collections/deps
 ansible-galaxy collection install -r ansible/requirements.yml
 
-# 3. run any line item (idempotent, standalone)
+# 3. run any line item (idempotent, standalone). Pass -e for the terraform outputs LI2 needs.
 ansible-playbook ansible/01-qwen3-opencode.yml
-ansible-playbook ansible/02-deepseek-langgraph.yml   # --ask-vault-pass if encrypted
 ansible-playbook ansible/03-qwen3coder-omp.yml
+
+# Line item 2 is two steps. 02a streams ~141 GB HF -> S3 from an ephemeral EC2 instance on
+# AWS's backbone (never touches your uplink), then self-terminates. 02 runs the Custom Model
+# Import job + LangGraph app; its own local-streaming step no-ops once 02a has staged S3.
+WB=$(cd terraform && terraform output -raw weights_bucket)
+RA=$(cd terraform && terraform output -raw cmi_import_role_arn)
+ansible-playbook ansible/02a-ec2-import-weights.yml -e weights_bucket=$WB   # AWS-side transfer
+ansible-playbook ansible/02-deepseek-langgraph.yml  -e weights_bucket=$WB -e cmi_import_role_arn=$RA
 ```
 
 ## Security

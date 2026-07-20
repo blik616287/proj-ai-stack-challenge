@@ -1,0 +1,128 @@
+---
+# Launches an ephemeral EC2 instance that streams the DeepSeek weights HF -> S3 entirely
+# inside AWS, waits for its STATUS_DONE marker, then terminates it. Idempotent: if the
+# marker already exists (weights already staged), the whole launch is skipped.
+
+- name: "Guard — required inputs"
+  ansible.builtin.assert:
+    that:
+      - weights_bucket | length > 0
+      - hf_token | length > 0
+    fail_msg: "Set weights_bucket (terraform output) and hf_token (secrets/secrets.yml)."
+
+- name: "Has the transfer already completed?"
+  ansible.builtin.command: >-
+    aws s3api head-object --bucket {{ weights_bucket }} --key _importer/STATUS_DONE
+    --region {{ region }} --profile {{ aws_profile }}
+  register: _done_marker
+  changed_when: false
+  failed_when: false
+
+- name: "Run the EC2 importer (skipped if STATUS_DONE already present)"
+  when: _done_marker.rc != 0
+  block:
+    - name: "Store HF token in SSM SecureString"
+      community.aws.ssm_parameter:
+        name: "{{ importer_ssm_token_name }}"
+        string_type: SecureString
+        value: "{{ hf_token }}"
+        overwrite_value: always
+        region: "{{ region }}"
+        profile: "{{ aws_profile }}"
+      no_log: true
+
+    - name: "Stage the streaming script in S3"
+      amazon.aws.s3_object:
+        bucket: "{{ weights_bucket }}"
+        object: "_importer/stream_hf_to_s3.sh"
+        src: "{{ role_path }}/../langgraph_deepseek/files/stream_hf_to_s3.sh"
+        mode: put
+        region: "{{ region }}"
+        profile: "{{ aws_profile }}"
+
+    - name: "Resolve latest Amazon Linux 2023 AMI"
+      ansible.builtin.command: >-
+        aws ssm get-parameter --region {{ region }} --profile {{ aws_profile }}
+        --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+        --query Parameter.Value --output text
+      register: _ami
+      changed_when: false
+
+    - name: "Resolve a default subnet if none supplied"
+      ansible.builtin.command: >-
+        aws ec2 describe-subnets --region {{ region }} --profile {{ aws_profile }}
+        --filters Name=default-for-az,Values=true
+        --query "Subnets[0].SubnetId" --output text
+      register: _subnet
+      changed_when: false
+      when: importer_subnet_id | length == 0
+
+    - name: "Set resolved facts"
+      ansible.builtin.set_fact:
+        _importer_ami: "{{ _ami.stdout | trim }}"
+        _importer_subnet: "{{ importer_subnet_id if importer_subnet_id | length > 0 else _subnet.stdout | trim }}"
+
+    - name: "Clear any stale STATUS_FAILED marker"
+      ansible.builtin.command: >-
+        aws s3 rm s3://{{ weights_bucket }}/_importer/STATUS_FAILED
+        --region {{ region }} --profile {{ aws_profile }}
+      changed_when: false
+      failed_when: false
+
+    - name: "Launch the importer instance"
+      amazon.aws.ec2_instance:
+        name: "coaa-cmi-importer"
+        instance_type: "{{ importer_instance_type }}"
+        image_id: "{{ _importer_ami }}"
+        subnet_id: "{{ _importer_subnet }}"
+        iam_instance_profile: "{{ importer_instance_profile }}"
+        user_data: "{{ lookup('template', 'userdata.sh.j2') }}"
+        metadata_options:
+          http_tokens: required
+        tags:
+          Project: coaa-bedrock-agents
+          Role: weights-importer
+        wait: true
+        state: running
+        region: "{{ region }}"
+        profile: "{{ aws_profile }}"
+      register: _ec2
+
+    - name: "Instance id"
+      ansible.builtin.debug:
+        msg: "Importer instance: {{ _ec2.instance_ids | default([_ec2.instances[0].instance_id]) | first }}"
+
+    - name: "Wait for STATUS_DONE / STATUS_FAILED in S3 (streaming ~141 GB, polls up to ~30 min)"
+      ansible.builtin.command: >-
+        aws s3 ls s3://{{ weights_bucket }}/_importer/
+        --region {{ region }} --profile {{ aws_profile }}
+      register: _status
+      changed_when: false
+      until: "'STATUS_DONE' in _status.stdout or 'STATUS_FAILED' in _status.stdout"
+      retries: 60
+      delay: 30
+
+    - name: "Terminate the importer instance"
+      amazon.aws.ec2_instance:
+        instance_ids: "{{ _ec2.instance_ids | default([_ec2.instances[0].instance_id]) }}"
+        state: terminated
+        wait: false
+        region: "{{ region }}"
+        profile: "{{ aws_profile }}"
+
+    - name: "Fail if the transfer did not complete"
+      ansible.builtin.assert:
+        that: "'STATUS_DONE' in _status.stdout"
+        fail_msg: "Importer reported STATUS_FAILED — see s3://{{ weights_bucket }}/_importer/importer.log"
+        success_msg: "Weights streamed to S3 by the EC2 importer."
+
+- name: "Confirm object count in S3"
+  ansible.builtin.command: >-
+    aws s3 ls s3://{{ weights_bucket }}/{{ imported_model_name }}/
+    --region {{ region }} --profile {{ aws_profile }}
+  register: _objs
+  changed_when: false
+
+- name: "Report"
+  ansible.builtin.debug:
+    msg: "{{ _objs.stdout_lines | length }} objects present in s3://{{ weights_bucket }}/{{ imported_model_name }}/"

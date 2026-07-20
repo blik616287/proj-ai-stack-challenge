@@ -47,10 +47,11 @@
     IMPORTED_MODEL_ARN: "{{ imported_model_arn }}"
   register: _lg_run
   changed_when: false
-  # First invocation of an imported model can cold-start; retry a few times.
+  # Imported models scale to zero and cold-start on first invoke, raising
+  # ModelNotReadyException for several minutes. Ride it out generously.
   until: _lg_run.rc == 0
-  retries: 5
-  delay: 20
+  retries: 25
+  delay: 30
 
 - name: "Show LangGraph smoke-test output"
   ansible.builtin.debug:

@@ -17,6 +17,13 @@ weights_bucket: ""          # <- terraform output weights_bucket
 cmi_import_role_arn: ""     # <- terraform output cmi_import_role_arn
 langgraph_app_dir: "{{ lookup('env','HOME') }}/coaa-langgraph-deepseek"
 
+# Line item 2 — in-AWS weights importer (02a). Streams HF -> S3 on AWS's backbone
+# so 141 GB never crosses the operator's connection.
+importer_instance_type: "c5n.large"          # network-optimized
+importer_instance_profile: "coaa-cmi-importer"
+importer_ssm_token_name: "/coaa/hf_token"
+importer_subnet_id: ""                        # empty -> auto-resolve a default subnet
+
 # Line item 3 — managed Qwen3-Coder + omp
 qwen3_coder_model_id: "qwen.qwen3-coder-30b-a3b-v1:0"
 

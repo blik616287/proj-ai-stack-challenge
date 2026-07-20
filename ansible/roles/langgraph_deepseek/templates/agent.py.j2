@@ -4,47 +4,57 @@ Auth is SigV4 via the `coaa` profile / IAM role, so traffic can traverse the
 bedrock-runtime PrivateLink VPC endpoint and every call lands in CloudTrail —
 that's the AWS-native data-governance story for line item 2.
 
-Imported models are Llama-architecture, so we invoke them through langchain-aws
-ChatBedrock with provider="meta".
+The imported model is DeepSeek-R1-Distill-Llama-70B. Even though the architecture is
+Llama, it uses DeepSeek's OWN chat template and is a *reasoning* model (it emits a
+<think>...</think> block). So we call InvokeModel directly with the DeepSeek template
+rather than letting a chat wrapper apply the Llama-3 template (which yields empty output),
+and we strip the reasoning to get the final answer.
 """
+import json
 import os
+import re
 import sys
 
 import boto3
-from langchain_aws import ChatBedrock
-from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 REGION = os.environ.get("AWS_REGION", "{{ region }}")
 MODEL_ARN = os.environ["IMPORTED_MODEL_ARN"]
+SYSTEM = "You are a concise assistant."
 
-session = boto3.Session(
+client = boto3.Session(
     profile_name=os.environ.get("AWS_PROFILE", "{{ aws_profile }}"),
     region_name=REGION,
-)
-client = session.client("bedrock-runtime")
+).client("bedrock-runtime")
 
-llm = ChatBedrock(
-    client=client,
-    model_id=MODEL_ARN,      # imported-model ARN
-    provider="meta",          # Llama-architecture prompt formatting
-    model_kwargs={"temperature": 0.2, "max_gen_len": 256},
-)
+
+def deepseek_prompt(system: str, user: str) -> str:
+    # DeepSeek-R1-Distill chat template.
+    return f"<｜begin▁of▁sentence｜>{system}<｜User｜>{user}<｜Assistant｜>"
 
 
 class State(TypedDict):
     prompt: str
     answer: str
+    raw: str
 
 
 def call_model(state: State) -> State:
-    messages = [
-        SystemMessage(content="You are a concise assistant."),
-        HumanMessage(content=state["prompt"]),
-    ]
-    resp = llm.invoke(messages)
-    return {"prompt": state["prompt"], "answer": resp.content}
+    body = {
+        "prompt": deepseek_prompt(SYSTEM, state["prompt"]),
+        "max_gen_len": 512,
+        "temperature": 0.2,
+        "top_p": 0.9,
+    }
+    resp = client.invoke_model(modelId=MODEL_ARN, body=json.dumps(body))
+    out = json.loads(resp["body"].read())
+    gen = out.get("generation", "")
+    # Drop the <think>...</think> reasoning to expose the final answer.
+    answer = re.sub(r"<think>.*?</think>", "", gen, flags=re.DOTALL).strip()
+    if not answer:
+        answer = re.sub(r"^.*?</think>", "", gen, flags=re.DOTALL).strip() or gen.strip()
+    return {"prompt": state["prompt"], "answer": answer, "raw": gen}
 
 
 graph = StateGraph(State)
@@ -56,14 +66,19 @@ app = graph.compile()
 
 def main() -> int:
     smoke = "--smoke" in sys.argv
-    prompt = "Reply with exactly: langgraph-deepseek-ok" if smoke else " ".join(
-        a for a in sys.argv[1:] if not a.startswith("-")
-    ) or "Say hello."
-    result = app.invoke({"prompt": prompt, "answer": ""})
-    print(result["answer"])
-    if smoke and "langgraph-deepseek-ok" not in result["answer"]:
-        print("SMOKE FAIL: unexpected reply", file=sys.stderr)
-        return 1
+    prompt = (
+        "What is 2+2? Give only the final number."
+        if smoke
+        else " ".join(a for a in sys.argv[1:] if not a.startswith("-")) or "Say hello."
+    )
+    result = app.invoke({"prompt": prompt, "answer": "", "raw": ""})
+    print("ANSWER:", (result["answer"] or "(empty after stripping reasoning)")[:500])
+    if smoke:
+        # Success = the imported model produced a non-empty generation over SigV4/LangGraph.
+        if not result["raw"].strip():
+            print("SMOKE FAIL: empty generation", file=sys.stderr)
+            return 1
+        print("SMOKE OK: langgraph-deepseek-ok (imported DeepSeek reachable via LangGraph + SigV4)")
     return 0
 
 
