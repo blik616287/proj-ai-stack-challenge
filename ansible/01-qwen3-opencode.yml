@@ -1,0 +1,13 @@
+---
+# Line item 1 — Qwen3 (Apache-2.0) on Bedrock managed + OpenCode (MIT).
+# Zero-infra enterprise path. Standalone & idempotent.
+#   ansible-playbook ansible/01-qwen3-opencode.yml
+- name: "Qwen3 (managed) + OpenCode"
+  hosts: agent_hosts
+  gather_facts: true
+  roles:
+    - role: bedrock_access
+      vars:
+        model_id: "{{ qwen3_model_id }}"
+    - role: bedrock_token
+    - role: opencode_qwen3

@@ -1,0 +1,47 @@
+---
+- name: "Install OpenCode (idempotent)"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if ! command -v opencode >/dev/null 2>&1; then
+      curl -fsSL https://opencode.ai/install | bash
+    fi
+  args:
+    executable: /bin/bash
+    creates: "{{ lookup('env','HOME') }}/.opencode/bin/opencode"
+  register: _oc_install
+
+- name: "Ensure OpenCode config dir"
+  ansible.builtin.file:
+    path: "{{ lookup('env','HOME') }}/.config/opencode"
+    state: directory
+    mode: "0755"
+
+- name: "Template OpenCode config → Bedrock Mantle provider, Qwen3 model"
+  ansible.builtin.template:
+    src: opencode.json.j2
+    dest: "{{ lookup('env','HOME') }}/.config/opencode/opencode.json"
+    mode: "0644"
+
+- name: "Write env file with the Bedrock bearer token (referenced as {env:BEDROCK_BEARER})"
+  ansible.builtin.copy:
+    dest: "{{ lookup('env','HOME') }}/.config/opencode/.env"
+    content: "BEDROCK_BEARER={{ bedrock_bearer_token }}\n"
+    mode: "0600"
+  no_log: true
+
+# --auto auto-approves the build agent's permission prompts (no TTY in a playbook run).
+- name: "Smoke test — one-shot OpenCode run against Qwen3"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export PATH="$HOME/.opencode/bin:$PATH"
+    export BEDROCK_BEARER="$(cat {{ bedrock_bearer_token_file }})"
+    opencode run --auto "Reply with exactly: opencode-qwen3-ok"
+  args:
+    executable: /bin/bash
+  register: _oc_run
+  changed_when: false
+  failed_when: _oc_run.rc != 0
+
+- name: "Show OpenCode smoke-test output"
+  ansible.builtin.debug:
+    msg: "{{ _oc_run.stdout_lines | default([]) | list }}"

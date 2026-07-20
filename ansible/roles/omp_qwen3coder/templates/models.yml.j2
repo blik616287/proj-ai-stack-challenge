@@ -1,0 +1,13 @@
+# omp / oh-my-pi provider config — AWS Bedrock via the Mantle OpenAI-compatible endpoint.
+# omp does not expand ${ENV} in apiKey, so Ansible templates the short-lived Bedrock
+# bearer token directly. Re-run the playbook to refresh it (default TTL 12h). This file
+# is written 0600. For long-lived use, swap in a permanent Bedrock API key or SigV4.
+providers:
+  bedrock-mantle:
+    api: openai-completions
+    baseUrl: "{{ mantle_base_url }}"
+    apiKey: "{{ bedrock_bearer_token }}"
+    authHeader: true
+    models:
+      - id: "{{ qwen3_coder_model_id }}"
+        name: "Qwen3-Coder (Bedrock managed)"

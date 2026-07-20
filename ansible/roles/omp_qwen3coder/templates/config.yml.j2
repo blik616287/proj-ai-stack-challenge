@@ -1,0 +1,8 @@
+# omp role routing — point the primary coding role at Bedrock-hosted Qwen3-Coder.
+roles:
+  primary:
+    provider: bedrock-mantle
+    model: "{{ qwen3_coder_model_id }}"
+  code:
+    provider: bedrock-mantle
+    model: "{{ qwen3_coder_model_id }}"

@@ -1,0 +1,84 @@
+---
+# DeepSeek-R1-Distill-Llama-70B weights (~141 GB, 17 shards) are streamed HuggingFace -> S3
+# directly (curl | aws s3 cp -), with NO local disk staging. Each file's size is verified
+# and re-runs skip files already present, so the transfer is resumable and idempotent.
+
+- name: "Check whether the imported model already exists (idempotency)"
+  ansible.builtin.command: >-
+    aws bedrock list-imported-models
+    --profile {{ aws_profile }} --region {{ region }}
+    --query "modelSummaries[?modelName=='{{ imported_model_name }}'].modelArn"
+    --output text
+  register: _existing_import
+  changed_when: false
+
+- name: "Set imported_model_arn fact when it already exists"
+  ansible.builtin.set_fact:
+    imported_model_arn: "{{ _existing_import.stdout | trim }}"
+  when: _existing_import.stdout | trim | length > 0
+
+- name: "Import block (skipped entirely if the model already exists)"
+  when: _existing_import.stdout | trim | length == 0
+  block:
+    - name: "Copy the HF->S3 streaming script to the host"
+      ansible.builtin.copy:
+        src: stream_hf_to_s3.sh
+        dest: "{{ lookup('env','HOME') }}/.cache/stream_hf_to_s3.sh"
+        mode: "0755"
+
+    - name: "Stream weights HuggingFace -> S3 directly (no local disk, resumable)"
+      ansible.builtin.command:
+        cmd: >-
+          {{ lookup('env','HOME') }}/.cache/stream_hf_to_s3.sh
+          {{ hf_repo_id }} {{ weights_bucket }} {{ imported_model_name }} {{ region }}
+      environment:
+        HF_TOKEN: "{{ hf_token }}"
+        AWS_PROFILE: "{{ aws_profile }}"
+      register: _stream
+      changed_when: "'stream ' in _stream.stdout"
+
+    - name: "Create the Bedrock model import job"
+      ansible.builtin.command: >-
+        aws bedrock create-model-import-job
+        --profile {{ aws_profile }} --region {{ region }}
+        --job-name "{{ imported_model_name }}-{{ 999999 | random }}"
+        --imported-model-name "{{ imported_model_name }}"
+        --role-arn "{{ cmi_import_role_arn }}"
+        --model-data-source '{"s3DataSource":{"s3Uri":"s3://{{ weights_bucket }}/{{ imported_model_name }}/"}}'
+        --query "jobArn" --output text
+      register: _import_job
+      changed_when: true
+
+    - name: "Wait for the import job to complete (polls up to ~40 min)"
+      ansible.builtin.command: >-
+        aws bedrock get-model-import-job
+        --profile {{ aws_profile }} --region {{ region }}
+        --job-identifier "{{ _import_job.stdout | trim }}"
+        --query "status" --output text
+      register: _job_status
+      changed_when: false
+      until: _job_status.stdout | trim in ['Completed', 'Failed']
+      retries: 80
+      delay: 30
+
+    - name: "Fail if the import job did not complete"
+      ansible.builtin.assert:
+        that: _job_status.stdout | trim == 'Completed'
+        fail_msg: "Import job ended in state {{ _job_status.stdout | trim }}."
+
+    - name: "Resolve the imported model ARN"
+      ansible.builtin.command: >-
+        aws bedrock list-imported-models
+        --profile {{ aws_profile }} --region {{ region }}
+        --query "modelSummaries[?modelName=='{{ imported_model_name }}'].modelArn"
+        --output text
+      register: _new_import
+      changed_when: false
+
+    - name: "Set imported_model_arn fact"
+      ansible.builtin.set_fact:
+        imported_model_arn: "{{ _new_import.stdout | trim }}"
+
+- name: "Report the imported model ARN"
+  ansible.builtin.debug:
+    msg: "Imported model ARN: {{ imported_model_arn }}"

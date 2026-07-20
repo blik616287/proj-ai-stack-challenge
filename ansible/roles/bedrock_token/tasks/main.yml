@@ -1,0 +1,39 @@
+---
+# Mints a short-term Bedrock bearer token from the `coaa` profile credentials and writes
+# it to a 0600 file. OpenCode + omp read it as OPENAI_API_KEY against the Mantle endpoint.
+# Short-term tokens are derived locally from SigV4 creds — nothing long-lived is stored in TF.
+- name: "Ensure token generator is installed"
+  ansible.builtin.pip:
+    name: aws-bedrock-token-generator
+    state: present
+  changed_when: false
+
+- name: "Ensure credential dir exists"
+  ansible.builtin.file:
+    path: "{{ lookup('env','HOME') }}/.config/coaa-bedrock"
+    state: directory
+    mode: "0700"
+
+- name: "Generate short-term Bedrock bearer token"
+  ansible.builtin.command:
+    cmd: >-
+      python3 -c "from aws_bedrock_token_generator import provide_token;
+      print(provide_token(region='{{ region }}'))"
+  environment:
+    AWS_PROFILE: "{{ aws_profile }}"
+  register: _bedrock_token
+  changed_when: false
+  no_log: true
+
+- name: "Write token to a 0600 file"
+  ansible.builtin.copy:
+    dest: "{{ lookup('env','HOME') }}/.config/coaa-bedrock/bearer_token"
+    content: "{{ _bedrock_token.stdout | trim }}"
+    mode: "0600"
+  no_log: true
+
+- name: "Expose token path as a fact"
+  ansible.builtin.set_fact:
+    bedrock_bearer_token: "{{ _bedrock_token.stdout | trim }}"
+    bedrock_bearer_token_file: "{{ lookup('env','HOME') }}/.config/coaa-bedrock/bearer_token"
+  no_log: true

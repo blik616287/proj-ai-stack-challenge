@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "bedrock-mantle": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "AWS Bedrock (Mantle, OpenAI-compatible)",
+      "options": {
+        "baseURL": "{{ mantle_base_url }}",
+        "apiKey": "{env:BEDROCK_BEARER}"
+      },
+      "models": {
+        "{{ qwen3_model_id }}": {
+          "name": "Qwen3 32B (Bedrock managed)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "model": "bedrock-mantle/{{ qwen3_model_id }}"
+}

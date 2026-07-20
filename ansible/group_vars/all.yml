@@ -1,0 +1,24 @@
+---
+# Single region for all three line items (managed Qwen + Mantle + Custom Model Import).
+aws_profile: coaa
+region: us-east-1
+
+# Pulled from `terraform output` — run `make tf-vars` or override on the CLI.
+mantle_base_url: "https://bedrock-mantle.{{ region }}.api.aws/v1"
+
+# Line item 1 — managed Qwen3 + OpenCode
+qwen3_model_id: "qwen.qwen3-32b-v1:0"
+opencode_version: "latest"
+
+# Line item 2 — DeepSeek custom import + LangGraph
+hf_repo_id: "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
+imported_model_name: "deepseek-r1-distill-llama-70b"
+weights_bucket: ""          # <- terraform output weights_bucket
+cmi_import_role_arn: ""     # <- terraform output cmi_import_role_arn
+langgraph_app_dir: "{{ lookup('env','HOME') }}/coaa-langgraph-deepseek"
+
+# Line item 3 — managed Qwen3-Coder + omp
+qwen3_coder_model_id: "qwen.qwen3-coder-30b-a3b-v1:0"
+
+# Secrets are loaded from ../secrets/secrets.yml (gitignored / vault). See secrets.example.yml.
+hf_token: "{{ vault_hf_token | default(lookup('env','HF_TOKEN')) }}"

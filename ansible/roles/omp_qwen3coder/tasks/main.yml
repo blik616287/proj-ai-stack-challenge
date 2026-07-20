@@ -1,0 +1,44 @@
+---
+- name: "Install omp / oh-my-pi (idempotent)"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if ! command -v omp >/dev/null 2>&1; then
+      curl -fsSL https://omp.sh/install | bash
+    fi
+  args:
+    executable: /bin/bash
+    creates: "{{ lookup('env','HOME') }}/.omp/bin/omp"
+
+- name: "Ensure omp agent config dir"
+  ansible.builtin.file:
+    path: "{{ lookup('env','HOME') }}/.omp/agent"
+    state: directory
+    mode: "0755"
+
+- name: "Template omp models.yml → Bedrock Mantle provider, Qwen3-Coder (0600 — holds token)"
+  ansible.builtin.template:
+    src: models.yml.j2
+    dest: "{{ lookup('env','HOME') }}/.omp/agent/models.yml"
+    mode: "0600"
+  no_log: true
+
+- name: "Template omp config.yml → route coding role to Qwen3-Coder"
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: "{{ lookup('env','HOME') }}/.omp/agent/config.yml"
+    mode: "0644"
+
+- name: "Smoke test — one-shot omp print-mode run against Qwen3-Coder"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    export PATH="$HOME/.omp/bin:$PATH"
+    omp -p --no-tools --no-session --model "bedrock-mantle/{{ qwen3_coder_model_id }}" "Reply with exactly: omp-qwen3coder-ok"
+  args:
+    executable: /bin/bash
+  register: _omp_run
+  changed_when: false
+  failed_when: _omp_run.rc != 0
+
+- name: "Show omp smoke-test output"
+  ansible.builtin.debug:
+    msg: "{{ _omp_run.stdout_lines | default([]) | list }}"

@@ -1,0 +1,57 @@
+---
+- name: "Create LangGraph app dir"
+  ansible.builtin.file:
+    path: "{{ langgraph_app_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: "Create a Python venv for the app"
+  ansible.builtin.command:
+    cmd: python3 -m venv {{ langgraph_app_dir }}/.venv
+    creates: "{{ langgraph_app_dir }}/.venv/bin/python"
+
+- name: "Drop requirements.txt"
+  ansible.builtin.copy:
+    src: requirements.txt
+    dest: "{{ langgraph_app_dir }}/requirements.txt"
+    mode: "0644"
+
+- name: "Install app deps into the venv (force public PyPI; global index is a gated mirror)"
+  ansible.builtin.pip:
+    requirements: "{{ langgraph_app_dir }}/requirements.txt"
+    virtualenv: "{{ langgraph_app_dir }}/.venv"
+    extra_args: "--index-url https://pypi.org/simple"
+
+- name: "Template the LangGraph app (SigV4 -> imported DeepSeek model)"
+  ansible.builtin.template:
+    src: agent.py.j2
+    dest: "{{ langgraph_app_dir }}/agent.py"
+    mode: "0644"
+
+- name: "Template the .env (region + imported model ARN, no secrets)"
+  ansible.builtin.copy:
+    dest: "{{ langgraph_app_dir }}/.env"
+    content: |
+      AWS_PROFILE={{ aws_profile }}
+      AWS_REGION={{ region }}
+      IMPORTED_MODEL_ARN={{ imported_model_arn }}
+    mode: "0644"
+
+- name: "Smoke test — run the graph once against the imported model"
+  ansible.builtin.command:
+    cmd: "{{ langgraph_app_dir }}/.venv/bin/python {{ langgraph_app_dir }}/agent.py --smoke"
+    chdir: "{{ langgraph_app_dir }}"
+  environment:
+    AWS_PROFILE: "{{ aws_profile }}"
+    AWS_REGION: "{{ region }}"
+    IMPORTED_MODEL_ARN: "{{ imported_model_arn }}"
+  register: _lg_run
+  changed_when: false
+  # First invocation of an imported model can cold-start; retry a few times.
+  until: _lg_run.rc == 0
+  retries: 5
+  delay: 20
+
+- name: "Show LangGraph smoke-test output"
+  ansible.builtin.debug:
+    msg: "{{ _lg_run.stdout_lines | default([]) | list }}"

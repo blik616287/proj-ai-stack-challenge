@@ -1,0 +1,71 @@
+"""Minimal LangGraph agent wired to a Bedrock Custom-Imported DeepSeek model.
+
+Auth is SigV4 via the `coaa` profile / IAM role, so traffic can traverse the
+bedrock-runtime PrivateLink VPC endpoint and every call lands in CloudTrail —
+that's the AWS-native data-governance story for line item 2.
+
+Imported models are Llama-architecture, so we invoke them through langchain-aws
+ChatBedrock with provider="meta".
+"""
+import os
+import sys
+
+import boto3
+from langchain_aws import ChatBedrock
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
+from typing_extensions import TypedDict
+
+REGION = os.environ.get("AWS_REGION", "{{ region }}")
+MODEL_ARN = os.environ["IMPORTED_MODEL_ARN"]
+
+session = boto3.Session(
+    profile_name=os.environ.get("AWS_PROFILE", "{{ aws_profile }}"),
+    region_name=REGION,
+)
+client = session.client("bedrock-runtime")
+
+llm = ChatBedrock(
+    client=client,
+    model_id=MODEL_ARN,      # imported-model ARN
+    provider="meta",          # Llama-architecture prompt formatting
+    model_kwargs={"temperature": 0.2, "max_gen_len": 256},
+)
+
+
+class State(TypedDict):
+    prompt: str
+    answer: str
+
+
+def call_model(state: State) -> State:
+    messages = [
+        SystemMessage(content="You are a concise assistant."),
+        HumanMessage(content=state["prompt"]),
+    ]
+    resp = llm.invoke(messages)
+    return {"prompt": state["prompt"], "answer": resp.content}
+
+
+graph = StateGraph(State)
+graph.add_node("model", call_model)
+graph.add_edge(START, "model")
+graph.add_edge("model", END)
+app = graph.compile()
+
+
+def main() -> int:
+    smoke = "--smoke" in sys.argv
+    prompt = "Reply with exactly: langgraph-deepseek-ok" if smoke else " ".join(
+        a for a in sys.argv[1:] if not a.startswith("-")
+    ) or "Say hello."
+    result = app.invoke({"prompt": prompt, "answer": ""})
+    print(result["answer"])
+    if smoke and "langgraph-deepseek-ok" not in result["answer"]:
+        print("SMOKE FAIL: unexpected reply", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

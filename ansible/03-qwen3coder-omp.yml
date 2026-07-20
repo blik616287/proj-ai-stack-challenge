@@ -1,0 +1,13 @@
+---
+# Line item 3 — Qwen3-Coder (Apache-2.0) on Bedrock managed + omp / oh-my-pi (MIT).
+# Same open terminal agent as the GR-OSS omp row, pointed at Bedrock hosting.
+#   ansible-playbook ansible/03-qwen3coder-omp.yml
+- name: "Qwen3-Coder (managed) + omp"
+  hosts: agent_hosts
+  gather_facts: true
+  roles:
+    - role: bedrock_access
+      vars:
+        model_id: "{{ qwen3_coder_model_id }}"
+    - role: bedrock_token
+    - role: omp_qwen3coder

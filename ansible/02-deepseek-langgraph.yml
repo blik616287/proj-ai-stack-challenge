@@ -1,0 +1,14 @@
+---
+# Line item 2 — DeepSeek open weights via Bedrock Custom Model Import + LangGraph (MIT).
+# AWS-native data-governance path (SigV4 + PrivateLink + CloudTrail).
+# Requires secrets/secrets.yml (hf_token) and terraform outputs (weights_bucket, cmi_import_role_arn).
+#   ansible-playbook ansible/02-deepseek-langgraph.yml --ask-vault-pass \
+#     -e weights_bucket=$(cd terraform && terraform output -raw weights_bucket) \
+#     -e cmi_import_role_arn=$(cd terraform && terraform output -raw cmi_import_role_arn)
+- name: "DeepSeek (custom import) + LangGraph"
+  hosts: agent_hosts
+  gather_facts: true
+  vars_files:
+    - ../secrets/secrets.yml
+  roles:
+    - role: langgraph_deepseek

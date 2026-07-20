@@ -1,0 +1,35 @@
+---
+# Verifies a managed Bedrock model is present & invokable in the target region.
+# `model_id` is passed in by the calling playbook.
+- name: "Confirm {{ model_id }} is listed in the region"
+  ansible.builtin.command: >-
+    aws bedrock list-foundation-models
+    --profile {{ aws_profile }} --region {{ region }}
+    --query "modelSummaries[?modelId=='{{ model_id }}'].modelId"
+    --output text
+  register: _model_list
+  changed_when: false
+
+- name: "Fail early if the model is not available to this account/region"
+  ansible.builtin.assert:
+    that: model_id in _model_list.stdout
+    fail_msg: >-
+      {{ model_id }} is not available in {{ region }} for profile {{ aws_profile }}.
+      Enable model access in the Bedrock console (Model access), then re-run.
+    success_msg: "{{ model_id }} is available."
+
+- name: "Smoke test — Converse one token against {{ model_id }}"
+  ansible.builtin.command: >-
+    aws bedrock-runtime converse
+    --profile {{ aws_profile }} --region {{ region }}
+    --model-id {{ model_id }}
+    --messages '[{"role":"user","content":[{"text":"reply with the single word: ok"}]}]'
+    --inference-config '{"maxTokens":8}'
+    --query "output.message.content[0].text" --output text
+  register: _converse
+  changed_when: false
+  failed_when: _converse.rc != 0
+
+- name: "Show smoke-test reply"
+  ansible.builtin.debug:
+    msg: "{{ model_id }} responded: {{ _converse.stdout | trim }}"

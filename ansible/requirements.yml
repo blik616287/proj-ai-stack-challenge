@@ -1,0 +1,10 @@
+---
+collections:
+  - name: amazon.aws
+    version: ">=8.0.0"
+  - name: community.aws
+    version: ">=8.0.0"
+  - name: community.general
+    version: ">=9.0.0"
+# Python deps on the control node (for boto3 smoke tests + the token generator):
+#   pip install boto3 botocore aws-bedrock-token-generator huggingface_hub

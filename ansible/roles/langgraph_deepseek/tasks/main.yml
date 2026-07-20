@@ -1,0 +1,16 @@
+---
+- name: "Guard — required vars for the import pipeline are set"
+  ansible.builtin.assert:
+    that:
+      - weights_bucket | length > 0
+      - cmi_import_role_arn | length > 0
+      - hf_token | length > 0
+    fail_msg: >-
+      Set weights_bucket + cmi_import_role_arn from `terraform output`, and provide hf_token
+      via secrets/secrets.yml (see secrets.example.yml). Then re-run.
+
+- name: "Import DeepSeek weights into Bedrock (HF -> S3 -> CreateModelImportJob)"
+  ansible.builtin.import_tasks: import_weights.yml
+
+- name: "Set up LangGraph reference app"
+  ansible.builtin.import_tasks: langgraph_app.yml
