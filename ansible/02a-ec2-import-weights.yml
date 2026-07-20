@@ -1,0 +1,18 @@
+---
+# Line item 2, step A — stream the DeepSeek weights into S3 from *inside AWS* (EC2 on the
+# AWS backbone), so ~141 GB never crosses the operator's connection. Run this BEFORE
+# 02-deepseek-langgraph.yml; that playbook's local streaming step then no-ops (files already
+# present) and it proceeds straight to the import job + LangGraph app.
+#
+#   ansible-playbook ansible/02a-ec2-import-weights.yml --ask-vault-pass \
+#     -e weights_bucket=$(cd terraform && terraform output -raw weights_bucket)
+#
+# Requires: terraform apply (creates the coaa-cmi-importer instance profile) and
+# secrets/secrets.yml (hf_token). Idempotent — skips the launch if weights are already staged.
+- name: "EC2 weights importer (HF -> S3, in-AWS)"
+  hosts: agent_hosts
+  gather_facts: false
+  vars_files:
+    - ../secrets/secrets.yml
+  roles:
+    - role: ec2_weight_importer

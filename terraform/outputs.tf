@@ -40,3 +40,12 @@ output "imported_model_name" {
 output "kms_key_arn" {
   value = var.enable_governance ? aws_kms_key.cmi[0].arn : ""
 }
+
+output "importer_instance_profile" {
+  description = "Instance profile for the EC2 weights importer (line item 2)"
+  value       = aws_iam_instance_profile.importer.name
+}
+
+output "importer_ssm_token_name" {
+  value = var.importer_ssm_token_name
+}

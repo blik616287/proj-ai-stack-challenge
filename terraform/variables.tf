@@ -45,3 +45,9 @@ variable "governance_subnet_ids" {
   type        = list(string)
   default     = []
 }
+
+variable "importer_ssm_token_name" {
+  description = "SSM SecureString parameter name holding the HF token for the EC2 weights importer"
+  type        = string
+  default     = "/coaa/hf_token"
+}
