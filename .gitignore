@@ -17,3 +17,7 @@ ansible/facts_cache/
 # python (langgraph app venv)
 ansible/roles/langgraph_deepseek/files/app/.venv/
 __pycache__/
+
+# claude
+.claude
+CLAUDE.md
