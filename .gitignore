@@ -1,0 +1,19 @@
+# secrets
+secrets/secrets.yml
+*.vault
+.env
+
+# terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
+*.tfvars
+
+# ansible
+*.retry
+ansible/facts_cache/
+
+# python (langgraph app venv)
+ansible/roles/langgraph_deepseek/files/app/.venv/
+__pycache__/
