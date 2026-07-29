@@ -65,3 +65,7 @@ ansible-playbook ansible/02-deepseek-langgraph.yml  -e weights_bucket=$WB -e cmi
 - Line item 2 routes inference through a `bedrock-runtime` PrivateLink VPC endpoint and logs
   every `InvokeModel` as a CloudTrail data event (see `terraform/governance.tf`).
 # proj-ai-stack-challenge
+
+## License
+
+[MIT](LICENSE) © 2026 Martin Forde <mforde84@gmail.com>, [Blik Labs](https://bliklabs.com).
