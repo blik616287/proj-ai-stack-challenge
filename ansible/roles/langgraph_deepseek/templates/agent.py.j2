@@ -9,10 +9,14 @@ Llama, it uses DeepSeek's OWN chat template and is a *reasoning* model (it emits
 <think>...</think> block). So we call InvokeModel directly with the DeepSeek template
 rather than letting a chat wrapper apply the Llama-3 template (which yields empty output),
 and we strip the reasoning to get the final answer.
+
+Prompting follows the DeepSeek-R1 model card: no system prompt (all instructions go in the
+user turn), temperature 0.6 / top_p 0.95, and the assistant turn is prefilled with
+"<think>\n" so the model always reasons before answering (otherwise it sometimes skips
+reasoning and just echoes the prompt).
 """
 import json
 import os
-import re
 import sys
 
 import boto3
@@ -20,8 +24,9 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 REGION = os.environ.get("AWS_REGION", "{{ region }}")
-MODEL_ARN = os.environ["IMPORTED_MODEL_ARN"]
-SYSTEM = "You are a concise assistant."
+MODEL_ARN = os.environ.get("IMPORTED_MODEL_ARN", "{{ imported_model_arn }}")
+# R1 reasons at length even on trivial prompts; 512 tokens often truncates mid-<think>.
+MAX_GEN_LEN = int(os.environ.get("MAX_GEN_LEN", "2048"))
 
 client = boto3.Session(
     profile_name=os.environ.get("AWS_PROFILE", "{{ aws_profile }}"),
@@ -29,9 +34,9 @@ client = boto3.Session(
 ).client("bedrock-runtime")
 
 
-def deepseek_prompt(system: str, user: str) -> str:
-    # DeepSeek-R1-Distill chat template.
-    return f"<｜begin▁of▁sentence｜>{system}<｜User｜>{user}<｜Assistant｜>"
+def deepseek_prompt(user: str) -> str:
+    # DeepSeek-R1-Distill chat template, no system prompt, reasoning block prefilled.
+    return f"<｜begin▁of▁sentence｜><｜User｜>{user}<｜Assistant｜><think>\n"
 
 
 class State(TypedDict):
@@ -42,18 +47,18 @@ class State(TypedDict):
 
 def call_model(state: State) -> State:
     body = {
-        "prompt": deepseek_prompt(SYSTEM, state["prompt"]),
-        "max_gen_len": 512,
-        "temperature": 0.2,
-        "top_p": 0.9,
+        "prompt": deepseek_prompt(state["prompt"]),
+        "max_gen_len": MAX_GEN_LEN,
+        "temperature": 0.6,
+        "top_p": 0.95,
     }
     resp = client.invoke_model(modelId=MODEL_ARN, body=json.dumps(body))
     out = json.loads(resp["body"].read())
     gen = out.get("generation", "")
-    # Drop the <think>...</think> reasoning to expose the final answer.
-    answer = re.sub(r"<think>.*?</think>", "", gen, flags=re.DOTALL).strip()
-    if not answer:
-        answer = re.sub(r"^.*?</think>", "", gen, flags=re.DOTALL).strip() or gen.strip()
+    # The prompt opens the reasoning block, so the final answer follows the closing
+    # </think>. No </think> means max_gen_len was hit mid-reasoning — return empty rather
+    # than leaking the raw reasoning.
+    answer = gen.rsplit("</think>", 1)[1].strip() if "</think>" in gen else ""
     return {"prompt": state["prompt"], "answer": answer, "raw": gen}
 
 
@@ -72,7 +77,12 @@ def main() -> int:
         else " ".join(a for a in sys.argv[1:] if not a.startswith("-")) or "Say hello."
     )
     result = app.invoke({"prompt": prompt, "answer": "", "raw": ""})
-    print("ANSWER:", (result["answer"] or "(empty after stripping reasoning)")[:500])
+    if result["answer"]:
+        print("ANSWER:", result["answer"])
+    elif result["raw"].strip():
+        print(f"ANSWER: (truncated during reasoning — hit MAX_GEN_LEN={MAX_GEN_LEN}; raise it)")
+    else:
+        print("ANSWER: (empty generation)")
     if smoke:
         # Success = the imported model produced a non-empty generation over SigV4/LangGraph.
         if not result["raw"].strip():

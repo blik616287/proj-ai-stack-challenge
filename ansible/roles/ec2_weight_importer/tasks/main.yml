@@ -92,14 +92,14 @@
       ansible.builtin.debug:
         msg: "Importer instance: {{ _ec2.instance_ids | default([_ec2.instances[0].instance_id]) | first }}"
 
-    - name: "Wait for STATUS_DONE / STATUS_FAILED in S3 (streaming ~141 GB, polls up to ~30 min)"
+    - name: "Wait for STATUS_DONE / STATUS_FAILED in S3 (streaming ~141 GB at ~3.5 GiB/min, polls up to ~60 min)"
       ansible.builtin.command: >-
         aws s3 ls s3://{{ weights_bucket }}/_importer/
         --region {{ region }} --profile {{ aws_profile }}
       register: _status
       changed_when: false
       until: "'STATUS_DONE' in _status.stdout or 'STATUS_FAILED' in _status.stdout"
-      retries: 60
+      retries: 120
       delay: 30
 
     - name: "Terminate the importer instance"
