@@ -1,13 +1,23 @@
 ---
-- name: "Install omp / oh-my-pi (idempotent)"
+# The installer drops the binary in ~/.local/bin; ~/.omp/bin is checked too for older
+# installs. Neither is guaranteed to be on a non-login shell's PATH, so add both.
+- name: "Install omp / oh-my-pi (idempotent) and resolve its path"
   ansible.builtin.shell: |
     set -euo pipefail
+    export PATH="$HOME/.local/bin:$HOME/.omp/bin:$PATH"
     if ! command -v omp >/dev/null 2>&1; then
-      curl -fsSL https://omp.sh/install | bash
+      curl -fsSL https://omp.sh/install | bash >&2
+      echo "installed" >&2
     fi
+    command -v omp
   args:
     executable: /bin/bash
-    creates: "{{ lookup('env','HOME') }}/.omp/bin/omp"
+  register: _omp_install
+  changed_when: "'installed' in _omp_install.stderr"
+
+- name: "Set omp binary path"
+  ansible.builtin.set_fact:
+    omp_bin: "{{ _omp_install.stdout_lines | last }}"
 
 - name: "Ensure omp agent config dir"
   ansible.builtin.file:
@@ -31,8 +41,7 @@
 - name: "Smoke test — one-shot omp print-mode run against Qwen3-Coder"
   ansible.builtin.shell: |
     set -euo pipefail
-    export PATH="$HOME/.omp/bin:$PATH"
-    omp -p --no-tools --no-session --model "bedrock-mantle/{{ qwen3_coder_model_id }}" "Reply with exactly: omp-qwen3coder-ok"
+    "{{ omp_bin }}" -p --no-tools --no-session --model "bedrock-mantle/{{ qwen3_coder_model_id }}" "Reply with exactly: omp-qwen3coder-ok"
   args:
     executable: /bin/bash
   register: _omp_run
