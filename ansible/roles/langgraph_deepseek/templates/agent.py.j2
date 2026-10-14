@@ -20,8 +20,10 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 REGION = os.environ.get("AWS_REGION", "{{ region }}")
-MODEL_ARN = os.environ["IMPORTED_MODEL_ARN"]
+MODEL_ARN = os.environ.get("IMPORTED_MODEL_ARN", "{{ imported_model_arn }}")
 SYSTEM = "You are a concise assistant."
+# R1 reasons at length even on trivial prompts; 512 tokens often truncates mid-<think>.
+MAX_GEN_LEN = int(os.environ.get("MAX_GEN_LEN", "2048"))
 
 client = boto3.Session(
     profile_name=os.environ.get("AWS_PROFILE", "{{ aws_profile }}"),
@@ -43,17 +45,22 @@ class State(TypedDict):
 def call_model(state: State) -> State:
     body = {
         "prompt": deepseek_prompt(SYSTEM, state["prompt"]),
-        "max_gen_len": 512,
+        "max_gen_len": MAX_GEN_LEN,
         "temperature": 0.2,
         "top_p": 0.9,
     }
     resp = client.invoke_model(modelId=MODEL_ARN, body=json.dumps(body))
     out = json.loads(resp["body"].read())
     gen = out.get("generation", "")
-    # Drop the <think>...</think> reasoning to expose the final answer.
-    answer = re.sub(r"<think>.*?</think>", "", gen, flags=re.DOTALL).strip()
-    if not answer:
-        answer = re.sub(r"^.*?</think>", "", gen, flags=re.DOTALL).strip() or gen.strip()
+    # The final answer follows the closing </think>. If the model opened a reasoning block
+    # but hit max_gen_len before closing it, there is no answer yet — return empty rather
+    # than leaking the raw reasoning.
+    if "</think>" in gen:
+        answer = gen.rsplit("</think>", 1)[1].strip()
+    elif "<think>" in gen:
+        answer = ""
+    else:
+        answer = gen.strip()
     return {"prompt": state["prompt"], "answer": answer, "raw": gen}
 
 
@@ -72,7 +79,12 @@ def main() -> int:
         else " ".join(a for a in sys.argv[1:] if not a.startswith("-")) or "Say hello."
     )
     result = app.invoke({"prompt": prompt, "answer": "", "raw": ""})
-    print("ANSWER:", (result["answer"] or "(empty after stripping reasoning)")[:500])
+    if result["answer"]:
+        print("ANSWER:", result["answer"])
+    elif "<think>" in result["raw"]:
+        print(f"ANSWER: (truncated during reasoning — hit MAX_GEN_LEN={MAX_GEN_LEN}; raise it)")
+    else:
+        print("ANSWER: (empty generation)")
     if smoke:
         # Success = the imported model produced a non-empty generation over SigV4/LangGraph.
         if not result["raw"].strip():
