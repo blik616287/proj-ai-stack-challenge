@@ -9,10 +9,14 @@ Llama, it uses DeepSeek's OWN chat template and is a *reasoning* model (it emits
 <think>...</think> block). So we call InvokeModel directly with the DeepSeek template
 rather than letting a chat wrapper apply the Llama-3 template (which yields empty output),
 and we strip the reasoning to get the final answer.
+
+Prompting follows the DeepSeek-R1 model card: no system prompt (all instructions go in the
+user turn), temperature 0.6 / top_p 0.95, and the assistant turn is prefilled with
+"<think>\n" so the model always reasons before answering (otherwise it sometimes skips
+reasoning and just echoes the prompt).
 """
 import json
 import os
-import re
 import sys
 
 import boto3
@@ -21,7 +25,6 @@ from typing_extensions import TypedDict
 
 REGION = os.environ.get("AWS_REGION", "{{ region }}")
 MODEL_ARN = os.environ.get("IMPORTED_MODEL_ARN", "{{ imported_model_arn }}")
-SYSTEM = "You are a concise assistant."
 # R1 reasons at length even on trivial prompts; 512 tokens often truncates mid-<think>.
 MAX_GEN_LEN = int(os.environ.get("MAX_GEN_LEN", "2048"))
 
@@ -31,9 +34,9 @@ client = boto3.Session(
 ).client("bedrock-runtime")
 
 
-def deepseek_prompt(system: str, user: str) -> str:
-    # DeepSeek-R1-Distill chat template.
-    return f"<｜begin▁of▁sentence｜>{system}<｜User｜>{user}<｜Assistant｜>"
+def deepseek_prompt(user: str) -> str:
+    # DeepSeek-R1-Distill chat template, no system prompt, reasoning block prefilled.
+    return f"<｜begin▁of▁sentence｜><｜User｜>{user}<｜Assistant｜><think>\n"
 
 
 class State(TypedDict):
@@ -44,23 +47,18 @@ class State(TypedDict):
 
 def call_model(state: State) -> State:
     body = {
-        "prompt": deepseek_prompt(SYSTEM, state["prompt"]),
+        "prompt": deepseek_prompt(state["prompt"]),
         "max_gen_len": MAX_GEN_LEN,
-        "temperature": 0.2,
-        "top_p": 0.9,
+        "temperature": 0.6,
+        "top_p": 0.95,
     }
     resp = client.invoke_model(modelId=MODEL_ARN, body=json.dumps(body))
     out = json.loads(resp["body"].read())
     gen = out.get("generation", "")
-    # The final answer follows the closing </think>. If the model opened a reasoning block
-    # but hit max_gen_len before closing it, there is no answer yet — return empty rather
+    # The prompt opens the reasoning block, so the final answer follows the closing
+    # </think>. No </think> means max_gen_len was hit mid-reasoning — return empty rather
     # than leaking the raw reasoning.
-    if "</think>" in gen:
-        answer = gen.rsplit("</think>", 1)[1].strip()
-    elif "<think>" in gen:
-        answer = ""
-    else:
-        answer = gen.strip()
+    answer = gen.rsplit("</think>", 1)[1].strip() if "</think>" in gen else ""
     return {"prompt": state["prompt"], "answer": answer, "raw": gen}
 
 
@@ -81,7 +79,7 @@ def main() -> int:
     result = app.invoke({"prompt": prompt, "answer": "", "raw": ""})
     if result["answer"]:
         print("ANSWER:", result["answer"])
-    elif "<think>" in result["raw"]:
+    elif result["raw"].strip():
         print(f"ANSWER: (truncated during reasoning — hit MAX_GEN_LEN={MAX_GEN_LEN}; raise it)")
     else:
         print("ANSWER: (empty generation)")
